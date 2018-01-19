@@ -1,0 +1,141 @@
+﻿------------------------------------首页---------------------------------------
+
+AbstractBootstrap类的dobind方法解析：
+
+    private ChannelFuture doBind(final SocketAddress localAddress) {
+	//1、channel创建：采用工厂的方式、getConstructor,newInstance的发射方式创建channel
+	//2、绑定处理器：绑定处理器handler，初始化选项options、属性attribute、初始化handler、channel到serverBootstrapAcceptor中
+	//3、注册线程池：将channel注册到EventLoopGroup线程池中
+        final ChannelFuture regFuture = initAndRegister();//详情看第1页
+        final Channel channel = regFuture.channel();
+        if (regFuture.cause() != null) {
+            return regFuture;
+        }
+
+        if (regFuture.isDone()) {
+            // 如果注册完成
+            ChannelPromise promise = channel.newPromise();
+            doBind0(regFuture, channel, localAddress, promise);//详情看第2页
+            return promise;
+        } else {
+            final PendingRegistrationPromise promise = new PendingRegistrationPromise(channel);
+            regFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    Throwable cause = future.cause();
+                    if (cause != null) {
+                        promise.setFailure(cause);
+                    } else {
+                        promise.registered();
+
+                        doBind0(regFuture, channel, localAddress, promise);
+                    }
+                }
+            });
+            return promise;
+        }
+    }
+
+
+---------------------------------第1页---------------------------------------
+
+    final ChannelFuture initAndRegister() {
+        Channel channel = null;
+        try {
+	    //工厂创建channel
+            channel = channelFactory.newChannel();
+	    //绑定处理器handler
+            init(channel);//详情看第3页
+        } catch (Throwable t) {
+            if (channel != null) {
+                channel.unsafe().closeForcibly();
+            }
+            return new DefaultChannelPromise(channel, GlobalEventExecutor.INSTANCE).setFailure(t);
+        }
+	//将channel注册到eventLoopGroup线程池中
+        ChannelFuture regFuture = config().group().register(channel);
+        if (regFuture.cause() != null) {
+            if (channel.isRegistered()) {
+                channel.close();
+            } else {
+                channel.unsafe().closeForcibly();
+            }
+        }
+      
+        return regFuture;
+    }
+
+---------------------------------第2页---------------------------------------
+
+ private static void doBind0(
+            final ChannelFuture regFuture, final Channel channel,
+            final SocketAddress localAddress, final ChannelPromise promise) {
+
+        channel.eventLoop().execute(new Runnable() {
+            @Override
+            public void run() {
+                if (regFuture.isSuccess()) {
+		     //注册成功，则异步返回绑定结果
+		     //如果绑定失败，则关闭channel并异步返回绑定失败
+                    channel.bind(localAddress, promise).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                } else {
+		    注册失败，则异步返回绑定失败
+                    promise.setFailure(regFuture.cause());
+                }
+            }
+        });
+    }
+---------------------------------第3页---------------------------------------
+
+    @Override
+    void init(Channel channel) throws Exception {
+        final Map<ChannelOption<?>, Object> options = options0();
+        synchronized (options) {
+	    //初始化选项options
+            setChannelOptions(channel, options, logger);
+        }
+
+        final Map<AttributeKey<?>, Object> attrs = attrs0();
+        synchronized (attrs) {
+            for (Entry<AttributeKey<?>, Object> e: attrs.entrySet()) {
+                @SuppressWarnings("unchecked")
+                AttributeKey<Object> key = (AttributeKey<Object>) e.getKey();
+		//初始化属性attrs
+                channel.attr(key).set(e.getValue());
+            }
+        }
+
+        ChannelPipeline p = channel.pipeline();
+
+        final EventLoopGroup currentChildGroup = childGroup;
+        final ChannelHandler currentChildHandler = childHandler;
+        final Entry<ChannelOption<?>, Object>[] currentChildOptions;
+        final Entry<AttributeKey<?>, Object>[] currentChildAttrs;
+        synchronized (childOptions) {
+            currentChildOptions = childOptions.entrySet().toArray(newOptionArray(childOptions.size()));
+        }
+        synchronized (childAttrs) {
+            currentChildAttrs = childAttrs.entrySet().toArray(newAttrArray(childAttrs.size()));
+        }
+
+        p.addLast(new ChannelInitializer<Channel>() {
+            @Override
+            public void initChannel(final Channel ch) throws Exception {
+                final ChannelPipeline pipeline = ch.pipeline();
+                ChannelHandler handler = config.handler();
+                if (handler != null) {
+		    //channel绑定处理器handler（主要工作）
+                    pipeline.addLast(handler);
+                }
+
+		///channel绑定的serverBootstrapAcceptor
+                ch.eventLoop().execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        pipeline.addLast(new ServerBootstrapAcceptor(
+                                ch, currentChildGroup, currentChildHandler, currentChildOptions, currentChildAttrs));
+                    }
+                });
+            }
+        });
+    }

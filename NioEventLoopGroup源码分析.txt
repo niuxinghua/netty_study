@@ -1,0 +1,9 @@
+NioEventLoopGroup的初始化的主要工作：初始化一堆线程NioEventLoop,然后根据某种策略构建选择器chooser来选择对应的线程。
+
+线程数：如果没有设置线程数，一般是cpu核数的两倍。NettyRuntime.availableProcessors() * 2
+某种策略：如果线程数为2次幂，则选择位运算（& 取高位），否则则是普通的轮询（%，即取模）
+
+细节方面：先创建一条运行线程（工厂生成），然后根据线程数迭代，依次（复写newChild方法）存到线程数组中，最后生成线程选择器chooser。
+
+
+
